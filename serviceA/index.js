@@ -1,25 +1,50 @@
 const express = require("express");
 const app = express();
 
+const grpc = require("@grpc/grpc-js");
+const protoLoader = require("@grpc/proto-loader");
+const PROTO_PATH = "../proto/calculator.proto";
+
 app.use(express.json());
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
 
-async function fetchWithRetry(url, options, retries = MAX_RETRIES) {
+// Load the protobuf
+const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
+  keepCase: true,
+  longs: String,
+  enums: String,
+  defaults: true,
+  oneofs: true,
+});
+const calculatorProto =
+  grpc.loadPackageDefinition(packageDefinition).calculator;
+
+// Create a gRPC client
+const client = new calculatorProto.Calculator(
+  "127.0.0.1:7000",
+  grpc.credentials.createInsecure()
+);
+
+async function fetchWithRetry(addition, retries = MAX_RETRIES) {
   try {
-    const response = await fetch(url, options);
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    return await response.json();
+    client.Add(
+      { number1: addition[0], number2: addition[1] },
+      (error, response) => {
+        if (error) {
+          console.error("Error occurred:", error);
+          throw Error("Failed to communicate with service B.");
+        } else {
+          res.status(200).json({ result: response.result });
+        }
+      }
+    );
   } catch (e) {
     if (retries > 0) {
       console.log(`Retrying... (${MAX_RETRIES - retries + 1})`);
       await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY));
-      return fetchWithRetry(url, options, retries - 1);
+      return fetchWithRetry(addition, retries - 1);
     } else {
       throw e; // Throw error after all retries are exhausted
     }
@@ -27,54 +52,71 @@ async function fetchWithRetry(url, options, retries = MAX_RETRIES) {
 }
 
 app.post("/addition", async (req, res, next) => {
-  try {
-    const { addition } = req.body;
-    const response = await fetchWithRetry("http://127.0.0.1:7000/addition/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ addition }),
+  const { query } = req.body;
+  if (query.indexOf("+") != 1) {
+    res.status(400).json({
+      error: "Query pattern should be (num+num)",
     });
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const { result } = await response.json();
-
-    res.status(200).json({
-      result,
-    });
-  } catch (e) {
-    console.error("Error occurred:", e);
-
-    let errorMessage = "Something went wrong.";
-    let statusCode = 500;
-
-    // Customize the error message based on the type or code
-    if (e.name === "FetchError") {
-      errorMessage = "Failed to fetch data from the server.";
-    } else if (e.name === "TypeError") {
-      errorMessage = "There was a type error.";
-    } else if (e.message.includes("HTTP error")) {
-      errorMessage = "There was a problem with the external service.";
-      statusCode = e.message.includes("status: 404") ? 404 : 500;
-    } else if (e.code === "ECONNREFUSED") {
-      errorMessage =
-        "Connection refused. Please check if the server is running.";
-      statusCode = 503;
-    } else if (e.code === "ENOTFOUND") {
-      errorMessage = "Service not found. Please check the URL.";
-      statusCode = 404;
-    }
-
-    res.status(statusCode).json({ error: errorMessage });
+    return;
   }
+  const array = query.split("+");
+  client.add({ number1: array[0], number2: array[1] }, (error, response) => {
+    if (error) {
+      console.error("Error occurred:", error);
+      res.status(500).json({ error: "Failed to communicate with service B." });
+    } else {
+      res.status(200).json({ result: response.result });
+    }
+  });
 });
 app.post("/subtraction", (req, res) => {
-  const { subtraction } = req.body;
+  const { query } = req.body;
+  if (query.indexOf("-") != 1) {
+    res.status(400).json({
+      error: "Query pattern should be (num-num)",
+    });
+    return;
+  }
+  const array = query.split("-");
+
+  client.subtraction(
+    { number1: array[0], number2: array[1] },
+    (error, response) => {
+      if (error) {
+        console.error("Error occurred:", error);
+        res.status(500).json({
+          error: "Failed /subtraction to communicate with service B.",
+        });
+      } else {
+        console.log(response);
+        res.status(200).json({ result: response.result });
+      }
+    }
+  );
 });
+
 app.post("/multiplication", (req, res) => {
-  const { multiplication } = req.body;
+  const { query } = req.body;
+  if (query.indexOf("*") != 1) {
+    res.status(400).json({
+      error: "Query pattern should be (num*num)",
+    });
+    return;
+  }
+  const array = query.split("*");
+  client.multiplication(
+    { number1: parseInt(array[0]), number2: parseInt(array[1]) },
+    (error, response) => {
+      if (error) {
+        console.error("Error occurred:", error);
+        res.status(500).json({
+          error: "Failed /subtraction to communicate with service B.",
+        });
+      } else {
+        res.status(200).json({ result: response.result });
+      }
+    }
+  );
 });
 app.post("/division", (req, res) => {
   const { division } = req.body;

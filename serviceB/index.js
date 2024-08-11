@@ -1,18 +1,56 @@
-const express = require("express");
-const app = express();
+const grpc = require("@grpc/grpc-js");
+const protoLoader = require("@grpc/proto-loader");
+const PROTO_PATH = "../proto/calculator.proto";
 
-app.use(express.json());
-app.post("/addition", (req, res) => {
-  const { addition } = req.body;
+// Load the protobuf
+const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
+  keepCase: true,
+  longs: String,
+  enums: String,
+  defaults: true,
+  oneofs: true,
+});
+const calculatorProto =
+  grpc.loadPackageDefinition(packageDefinition).calculator;
 
-  const array = addition.split("+");
-  const result = parseInt(array[0]) + parseInt(array[1]);
+// Implement the add function
+function add(call, callback) {
+  const result = call.request.number1 + call.request.number2;
+  callback(null, { result });
+}
 
-  res.status(200).json({
-    result,
+function subtraction(call, callback) {
+  console.log(call.request);
+  const result = call.request.number1 - call.request.number2;
+  callback(null, { result });
+}
+
+function multiplication(call, callback) {
+  try {
+    const result = call.request.number1 * call.request.number2;
+    callback(null, { result });
+  } catch (e) {
+    console.log(e);
+    callback(e, null);
+  }
+}
+
+// Start the gRPC server
+function main() {
+  const server = new grpc.Server();
+  server.addService(calculatorProto.Calculator.service, {
+    add,
+    subtraction,
+    multiplication,
   });
-});
+  server.bindAsync(
+    "127.0.0.1:7000",
+    grpc.ServerCredentials.createInsecure(),
+    () => {
+      console.log("gRPC server running at http://127.0.0.1:7000");
+      server.start();
+    }
+  );
+}
 
-app.listen(7000, () => {
-  console.log("ServiceB is running", 7000);
-});
+main();
